@@ -190,15 +190,16 @@ jobs:
               canvas = Image.new('RGBA', (side, side), (255, 255, 255, 0))
               canvas.alpha_composite(im, ((side-im.width)//2, (side-im.height)//2))
               sizes = [(n, n) for n in (16, 24, 32, 48, 64, 128, 256)]
-              for target in ('res/icon.ico', 'flutter/windows/runner/resources/app_icon.ico'):
+              for target in ('res/icon.ico', 'res/tray-icon.ico', 'flutter/windows/runner/resources/app_icon.ico', 'flutter/assets/icon.ico'):
                   p = Path(target)
-                  if not p.is_file():
-                      raise SystemExit(f'Expected upstream icon is missing: {target}')
+                  if not p.parent.is_dir():
+                      raise SystemExit(f'Expected upstream icon directory is missing: {target}')
                   canvas.save(p, format='ICO', sizes=sizes)
                   with Image.open(p) as check:
                       if check.ico.sizes() != set(sizes):
                           raise SystemExit(f'Icon size validation failed: {target}')
-          print('Applied custom executable and Windows runner icons')
+              canvas.save('flutter/assets/icon.png', format='PNG')
+          print('Applied executable, runtime window, and tray icons')
 
       - name: Embed server and permission defaults
         shell: python {0}
@@ -335,6 +336,42 @@ jobs:
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT\installed"
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg dependency installation failed' }
 
+      - name: Set GIBRemote Windows application identity
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          def patch(path, old, new):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if s.count(old) != 1:
+                  raise SystemExit(f'Expected one application identity marker in {path}')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          patch('libs/hbb_common/src/config.rs',
+                'pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());',
+                'pub static ref APP_NAME: RwLock<String> = RwLock::new("GIBRemote".to_owned());')
+          patch('flutter/windows/runner/main.cpp',
+                'std::wstring app_name = L"RustDesk";',
+                'std::wstring app_name = L"GIBRemote";')
+          for old, new in (
+              ('"FileDescription", "RustDesk Remote Desktop"', '"FileDescription", "GIBRemote"'),
+              ('"InternalName", "rustdesk"', '"InternalName", "GIBRemote"'),
+              ('"OriginalFilename", "rustdesk.exe"', '"OriginalFilename", "GIBRemote.exe"'),
+              ('"ProductName", "RustDesk"', '"ProductName", "GIBRemote"'),
+          ):
+              patch('flutter/windows/runner/Runner.rc', old, new)
+          p = Path('src/platform/windows.rs')
+          source = p.read_text(encoding='utf-8')
+          start = source.index('pub fn rename_exe_cmd(')
+          end = source.index('\n#[inline]', start)
+          block = source[start:end]
+          old = 'let app_name = crate::get_app_name().to_lowercase();'
+          if block.count(old) != 1:
+              raise SystemExit('Unexpected Windows executable rename function')
+          block = block.replace(old, 'let app_name = crate::get_app_name();')
+          block = block.replace('format!("{app_name}.exe")', 'format!("{app_name}.exe").to_lowercase()')
+          p.write_text(source[:start] + block + source[end:], encoding='utf-8')
+          print('Set application identity, installed executable, shortcuts and service name to GIBRemote')
+
       - name: Customize the About page
         shell: python {0}
         run: |
@@ -355,19 +392,8 @@ jobs:
           original_copyright = r"'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license'"
           replace_once(original_copyright, r"'贵州济彼科技有限公司\nCopyright © 2026 GIB Tech Co., Ltd.'")
           replace_once("translate('Slogan_tip')", "'济以新智 彼见所成'")
-          # Keep upstream attribution and license visible below the custom brand panel.
-          anchor = ').marginSymmetric(vertical: 4.0)\n            ],'
-          replacement = """          ).marginSymmetric(vertical: 4.0),
-                        SelectionArea(
-                          child: Text(
-                            '基于 RustDesk 开源项目\\nCopyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\\n$license',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ),
-                      ],"""
-          replace_once(anchor, replacement.lstrip())
           p.write_text(source[:start] + about + source[end:], encoding='utf-8')
-          print('Applied GIB About-page branding; version, fingerprint and upstream attribution retained')
+          print('Applied GIB About-page branding; version and fingerprint retained')
 
       - name: Hide the portable installation warning text
         shell: python {0}
@@ -402,17 +428,18 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'EXE packaging failed' }
           } finally { Pop-Location }
           New-Item -ItemType Directory -Force output | Out-Null
-          Copy-Item target/release/rustdesk-portable-packer.exe output/rustdesk-1.4.9-custom-x64.exe
-          $file = Get-FileHash output/rustdesk-1.4.9-custom-x64.exe -Algorithm SHA256
-          "$($file.Hash.ToLower())  rustdesk-1.4.9-custom-x64.exe" | Set-Content output/SHA256SUMS.txt -Encoding ascii
+          Copy-Item target/release/rustdesk-portable-packer.exe output/GIBRemote-1.4.9-custom-x64.exe
+          $file = Get-FileHash output/GIBRemote-1.4.9-custom-x64.exe -Algorithm SHA256
+          "$($file.Hash.ToLower())  GIBRemote-1.4.9-custom-x64.exe" | Set-Content output/SHA256SUMS.txt -Encoding ascii
           @'
           RustDesk 1.4.9 custom Windows x64 base client (unsigned).
           Four repository Variables are compiled as defaults; saved local settings take precedence.
           Remote configuration modification and camera access are enabled by default and can be unchecked.
           Password verification defaults to both temporary and permanent passwords; existing local settings take precedence.
           The preset is generated from the repository Secret, with a random salt and the upstream hash format.
-          Executable and Windows runner icons use custom-icon.png from the workflow repository.
-          About-page branding: GIB company, website and slogan; upstream attribution retained below.
+          Executable, runtime window and tray icons use custom-icon.png from the workflow repository.
+          About-page branding: GIB company, website and slogan.
+          Application identity is GIBRemote; existing RustDesk configuration is not automatically migrated.
           The privacy link is explicitly labelled as the original RustDesk privacy statement.
           The portable-installation warning text is hidden; the Install button remains available.
           Hiding the text does not change Windows UAC restrictions or install a service.
