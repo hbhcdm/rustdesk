@@ -390,7 +390,7 @@ jobs:
           replace_once("launchUrlString('https://rustdesk.com');", "launchUrlString('https://www.gib.cn');")
           replace_once("translate('Privacy Statement')", "'RustDesk 原版隐私声明'")
           original_copyright = r"'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license'"
-          replace_once(original_copyright, r"'贵州济彼科技有限公司\nCopyright © 2026 GIB Tech Co., Ltd.'")
+          replace_once(original_copyright, r"'贵州济彼科技提供技术支持\nCopyright © 2026 GIB Tech Co., Ltd.'")
           replace_once("translate('Slogan_tip')", "'济以新智 彼见所成'")
           p.write_text(source[:start] + about + source[end:], encoding='utf-8')
           print('Applied GIB About-page branding; version and fingerprint retained')
