@@ -1,0 +1,321 @@
+# Add this file to .github/workflows/build-custom-windows.yml on your default branch.
+# Required repository Variables: RD_ID_SERVER, RD_RELAY_SERVER, RD_API_SERVER, RD_PUBLIC_KEY.
+# Builds upstream 1.4.9 plus these defaults; changes on the fork's master are not compiled.
+# Unsigned base client: additional printer/display drivers and privacy helper are not bundled.
+name: Build Custom Windows x64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_BUILD_JOBS: "4"
+
+jobs:
+  bridge:
+    name: Generate bridge for RustDesk 1.4.9
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Check the four repository variables
+        shell: python3 {0}
+        env:
+          RD_ID_SERVER: ${{ vars.RD_ID_SERVER }}
+          RD_RELAY_SERVER: ${{ vars.RD_RELAY_SERVER }}
+          RD_API_SERVER: ${{ vars.RD_API_SERVER }}
+          RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
+        run: |
+          import base64
+          import os
+          from urllib.parse import urlsplit
+          names = ('RD_ID_SERVER', 'RD_RELAY_SERVER', 'RD_API_SERVER', 'RD_PUBLIC_KEY')
+          values = {name: os.environ.get(name, '').strip() for name in names}
+          for name, value in values.items():
+              if not value:
+                  raise SystemExit(f'Missing repository Variable: {name}')
+              if not value.isascii() or any(c.isspace() for c in value):
+                  raise SystemExit(f'{name}: use ASCII text without spaces or line breaks')
+          for name in ('RD_ID_SERVER', 'RD_RELAY_SERVER'):
+              if any(c in values[name] for c in '/\\\"\'()'):
+                  raise SystemExit(f'{name}: enter a hostname or host:port, not a URL')
+          api = urlsplit(values['RD_API_SERVER'])
+          if api.scheme not in ('http', 'https') or not api.hostname or api.username or api.password:
+              raise SystemExit('RD_API_SERVER: enter a full HTTP(S) URL without credentials')
+          try:
+              key = base64.b64decode(values['RD_PUBLIC_KEY'], validate=True)
+          except Exception:
+              raise SystemExit('RD_PUBLIC_KEY is not valid Base64; copy the complete public key')
+          if len(key) != 32:
+              raise SystemExit('RD_PUBLIC_KEY must decode to 32 bytes; check for a truncated key')
+          print('All four variables passed format checks. Server connectivity is not tested here.')
+
+      - name: Checkout upstream RustDesk 1.4.9
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: rustdesk/rustdesk
+          ref: '1.4.9'
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Use the libwebm GitHub mirror
+        run: git config --global url."https://github.com/webmproject/libwebm".insteadOf "https://chromium.googlesource.com/webm/libwebm"
+
+      - name: Install bridge prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates clang cmake curl gcc git g++ libclang-dev libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
+
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.75.0'
+          components: rustfmt
+
+      - name: Cache Rust bridge tools
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: custom-bridge-1.4.9
+
+      - name: Install Flutter for bridge generation
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: '3.22.3'
+
+      - name: Generate bridge files
+        run: |
+          cargo install cargo-expand --version 1.0.95 --locked
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('flutter/pubspec.yaml')
+          s = p.read_text(encoding='utf-8')
+          old = 'extended_text: 14.0.0'
+          if s.count(old) != 1:
+              raise SystemExit('Unexpected pubspec.yaml; verify source version')
+          p.write_text(s.replace(old, 'extended_text: 13.0.0'), encoding='utf-8')
+          PY
+          (cd flutter && flutter pub get)
+          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp flutter/macos/Runner/bridge_generated.h flutter/ios/Runner/bridge_generated.h
+          test -s src/bridge_generated.rs
+          test -s src/bridge_generated.io.rs
+          test -s flutter/lib/generated_bridge.dart
+          test -s flutter/lib/generated_bridge.freezed.dart
+
+      - name: Save bridge files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: custom-bridge-1.4.9
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            src/bridge_generated.rs
+            src/bridge_generated.io.rs
+            flutter/lib/generated_bridge.dart
+            flutter/lib/generated_bridge.freezed.dart
+            flutter/macos/Runner/bridge_generated.h
+            flutter/ios/Runner/bridge_generated.h
+
+  windows:
+    name: Build and package Windows x64
+    needs: bridge
+    runs-on: windows-2022
+    timeout-minutes: 240
+    env:
+      VCPKG_ROOT: C:\rd-vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+      VCPKG_BINARY_SOURCES: 'clear;files,C:\rd-vcpkg-cache,readwrite'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout upstream RustDesk 1.4.9
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: rustdesk/rustdesk
+          ref: '1.4.9'
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: custom-bridge-1.4.9
+          path: .
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Embed server defaults
+        shell: python {0}
+        env:
+          RD_ID_SERVER: ${{ vars.RD_ID_SERVER }}
+          RD_RELAY_SERVER: ${{ vars.RD_RELAY_SERVER }}
+          RD_API_SERVER: ${{ vars.RD_API_SERVER }}
+          RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          fields = {
+              'custom-rendezvous-server': 'RD_ID_SERVER',
+              'relay-server': 'RD_RELAY_SERVER',
+              'api-server': 'RD_API_SERVER',
+              'key': 'RD_PUBLIC_KEY',
+          }
+          p = Path('libs/hbb_common/src/config.rs')
+          source = p.read_text(encoding='utf-8')
+          old = 'pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+          if source.count(old) != 1:
+              raise SystemExit('Expected one DEFAULT_SETTINGS declaration; refusing an ambiguous patch')
+          lines = ['pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = {',
+                   '    let mut settings = HashMap::new();']
+          for option, variable in fields.items():
+              value = os.environ[variable].strip()
+              if not value or not value.isascii() or any(c.isspace() for c in value):
+                  raise SystemExit(f'Invalid value for {variable}')
+              lines.append(f'    settings.insert({json.dumps(option)}.to_owned(), {json.dumps(value)}.to_owned());')
+          lines.extend(['    RwLock::new(settings)', '};'])
+          p.write_text(source.replace(old, '\n'.join(lines)), encoding='utf-8')
+          print('Embedded four server defaults; existing local settings can override them.')
+
+      - name: Configure native tools and dependency mirror
+        run: |
+          git config --global url."https://github.com/webmproject/libwebm".insteadOf "https://chromium.googlesource.com/webm/libwebm"
+          if ($LASTEXITCODE -ne 0) { throw 'Git configuration failed' }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'Visual Studio C++ tools are missing' }
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          foreach ($name in @('PATH','INCLUDE','LIB','LIBPATH','WindowsSdkDir','WindowsSDKVersion','VCToolsInstallDir','VSINSTALLDIR')) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($value) { "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append }
+          }
+
+      - name: Install LLVM 15.0.6
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+        with:
+          version: '15.0.6'
+
+      - name: Configure libclang
+        run: |
+          $clangBin = Split-Path (Get-Command clang.exe).Source
+          if (-not (Test-Path "$clangBin\libclang.dll")) { throw 'libclang.dll was not found' }
+          "LIBCLANG_PATH=$clangBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.75.0'
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - name: Cache Rust compilation
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: custom-windows-1.4.9
+
+      - name: Install Flutter 3.24.5
+        id: flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225
+        with:
+          channel: stable
+          flutter-version: '3.24.5'
+          architecture: x64
+
+      - name: Prepare Flutter patch and custom engine
+        run: |
+          flutter config --enable-windows-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter configuration failed' }
+          flutter precache --windows
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter precache failed' }
+          $flutterRoot = Split-Path (Split-Path (Get-Command flutter).Source)
+          $patch = Join-Path $env:GITHUB_WORKSPACE '.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff'
+          git -C $flutterRoot apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter patch failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'rd-engine.zip'
+          $expanded = Join-Path $env:RUNNER_TEMP 'rd-engine'
+          Invoke-WebRequest 'https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip' -OutFile $archive
+          Expand-Archive $archive -DestinationPath $expanded -Force
+          Copy-Item "$expanded\*" "$flutterRoot\bin\cache\artifacts\engine\windows-x64-release" -Recurse -Force
+          flutter doctor -v
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter doctor failed' }
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: C:\rd-vcpkg-cache
+          key: rd-vcpkg-win2022-x64-120deac-v1-${{ hashFiles('vcpkg.json', 'res/vcpkg/**') }}
+
+      - name: Install pinned vcpkg dependencies
+        run: |
+          New-Item -ItemType Directory -Force C:\rd-vcpkg-cache | Out-Null
+          git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg clone failed' }
+          git -C $env:VCPKG_ROOT checkout 120deac3062162151622ca4860575a33844ba10b
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg checkout failed' }
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT\installed"
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg dependency installation failed' }
+
+      - name: Build Windows client
+        run: |
+          python build.py --flutter --portable --hwcodec --vram --skip-portable-pack
+          if ($LASTEXITCODE -ne 0) { throw 'RustDesk compilation failed' }
+          foreach ($file in @('rustdesk.exe','librustdesk.dll','flutter_windows.dll')) {
+            if (-not (Test-Path "flutter/build/windows/x64/runner/Release/$file")) { throw "Missing output: $file" }
+          }
+
+      - name: Package standalone EXE
+        run: |
+          python -m pip install -r libs/portable/requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging dependency installation failed' }
+          python -c "from pathlib import Path; p=Path('res/manifest.xml'); s=p.read_text(encoding='utf-8'); p.write_text(''.join(x for x in s.splitlines(True) if 'dpiAware' not in x), encoding='utf-8')"
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest preparation failed' }
+          Push-Location libs/portable
+          try {
+            python generate.py -f ../../flutter/build/windows/x64/runner/Release -o . -e ../../flutter/build/windows/x64/runner/Release/rustdesk.exe
+            if ($LASTEXITCODE -ne 0) { throw 'EXE packaging failed' }
+          } finally { Pop-Location }
+          New-Item -ItemType Directory -Force output | Out-Null
+          Copy-Item target/release/rustdesk-portable-packer.exe output/rustdesk-1.4.9-custom-x64.exe
+          $file = Get-FileHash output/rustdesk-1.4.9-custom-x64.exe -Algorithm SHA256
+          "$($file.Hash.ToLower())  rustdesk-1.4.9-custom-x64.exe" | Set-Content output/SHA256SUMS.txt -Encoding ascii
+          @'
+          RustDesk 1.4.9 custom Windows x64 base client (unsigned).
+          Four repository Variables are compiled as defaults; saved local settings take precedence.
+          Test on a clean Windows account or VM to verify your server configuration.
+          Additional printer/display drivers and the privacy-mode helper are not bundled.
+          '@ | Set-Content output/BUILD-NOTES.txt -Encoding utf8
+
+      - name: Upload downloadable EXE
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: RustDesk-Custom-Windows-x64
+          path: output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Windows-build-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            C:/rd-vcpkg/buildtrees/**/*.log
+            flutter/build/windows/**/CMakeFiles/CMakeConfigureLog.yaml
