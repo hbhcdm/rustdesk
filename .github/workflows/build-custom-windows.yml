@@ -1,5 +1,5 @@
 # Add this file to .github/workflows/build-custom-windows.yml on your default branch.
-# Required repository Secret: RD_PERMANENT_PASSWORD; root asset: custom-icon.png.
+# Required repository Secrets: RD_PERMANENT_PASSWORD, RD_SETTINGS_PIN; root asset: custom-icon.png.
 # Required repository Variables: RD_ID_SERVER, RD_RELAY_SERVER, RD_API_SERVER, RD_PUBLIC_KEY.
 # Builds upstream 1.4.9 plus these defaults; changes on the fork's master are not compiled.
 # Unsigned base client: additional printer/display drivers and privacy helper are not bundled.
@@ -33,12 +33,16 @@ jobs:
           RD_API_SERVER: ${{ vars.RD_API_SERVER }}
           RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
           RD_PERMANENT_PASSWORD: ${{ secrets.RD_PERMANENT_PASSWORD }}
+          RD_SETTINGS_PIN: ${{ secrets.RD_SETTINGS_PIN }}
         run: |
           import base64
           import os
           from urllib.parse import urlsplit
           if len(os.environ.get('RD_PERMANENT_PASSWORD', '')) < 6:
               raise SystemExit('Set repository Secret RD_PERMANENT_PASSWORD (at least 6 characters)')
+          pin = os.environ.get('RD_SETTINGS_PIN', '')
+          if not (pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 16):
+              raise SystemExit('Set repository Secret RD_SETTINGS_PIN to 4-16 ASCII digits')
           names = ('RD_ID_SERVER', 'RD_RELAY_SERVER', 'RD_API_SERVER', 'RD_PUBLIC_KEY')
           values = {name: os.environ.get(name, '').strip() for name in names}
           for name, value in values.items():
@@ -337,6 +341,35 @@ jobs:
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT\installed"
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg dependency installation failed' }
 
+      - name: Initialize settings unlock PIN
+        shell: python {0}
+        env:
+          RD_SETTINGS_PIN: ${{ secrets.RD_SETTINGS_PIN }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          pin = os.environ.get('RD_SETTINGS_PIN', '')
+          if not (pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 16):
+              raise SystemExit('RD_SETTINGS_PIN must contain 4-16 ASCII digits')
+          p = Path('libs/hbb_common/src/config.rs')
+          source = p.read_text(encoding='utf-8')
+          old = '        config.unlock_pin = unlock_pin;\n        store |= store2;'
+          if source.count(old) != 1:
+              raise SystemExit('Unexpected Config2 PIN initialization; refusing an ambiguous patch')
+          new = old + '\n' + '\n'.join([
+              '        // Apply the initial PIN once; preserve existing PINs and later user choices.',
+              '        if !config.options.contains_key("gib-settings-pin-initialized") {',
+              '            if config.unlock_pin.is_empty() {',
+              f'                config.unlock_pin = {json.dumps(pin)}.to_owned();',
+              '            }',
+              '            config.options.insert("gib-settings-pin-initialized".to_owned(), "Y".to_owned());',
+              '            store = true;',
+              '        }',
+          ])
+          p.write_text(source.replace(old, new, 1), encoding='utf-8')
+          print('Configured first-use settings PIN; existing PINs and subsequent changes are preserved')
+
       - name: Set GIBRemote Windows application identity
         shell: python {0}
         run: |
@@ -372,6 +405,25 @@ jobs:
           block = block.replace('format!("{app_name}.exe")', 'format!("{app_name}.exe").to_lowercase()')
           p.write_text(source[:start] + block + source[end:], encoding='utf-8')
           print('Set application identity, installed executable, shortcuts and service name to GIBRemote')
+
+      - name: Customize home support label
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          p = Path('flutter/lib/common.dart')
+          source = p.read_text(encoding='utf-8')
+          start = source.index('Widget loadPowered(BuildContext context) {')
+          end = source.index("const _kDefaultLogoAsset", start)
+          block = source[start:end]
+          for old, new in (
+              ('translate("powered_by_me")', "'由济彼科技提供技术支持'"),
+              ("launchUrl(Uri.parse('https://rustdesk.com'));", "launchUrl(Uri.parse('https://www.gib.cn'));"),
+          ):
+              if block.count(old) != 1:
+                  raise SystemExit('Unexpected home support widget; refusing an ambiguous patch')
+              block = block.replace(old, new, 1)
+          p.write_text(source[:start] + block + source[end:], encoding='utf-8')
+          print('Updated home support label and website link')
 
       - name: Customize the About page
         shell: python {0}
@@ -463,6 +515,8 @@ jobs:
           About-page branding: GIB company, website and slogan.
           Application identity and packaged startup executable are GIBRemote / GIBRemote.exe.
           Existing RustDesk configuration is not automatically migrated.
+          Installed-client settings use an initial unlock PIN from RD_SETTINGS_PIN when none exists.
+          Existing PINs and later changes or removal are preserved; this is a UI settings lock.
           The privacy link is explicitly labelled as the original RustDesk privacy statement.
           The portable-installation warning text is hidden; the Install button remains available.
           Hiding the text does not change Windows UAC restrictions or install a service.
