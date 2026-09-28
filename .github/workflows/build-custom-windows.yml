@@ -41,8 +41,8 @@ jobs:
           if len(os.environ.get('RD_PERMANENT_PASSWORD', '')) < 6:
               raise SystemExit('Set repository Secret RD_PERMANENT_PASSWORD (at least 6 characters)')
           pin = os.environ.get('RD_SETTINGS_PIN', '')
-          if not (pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 16):
-              raise SystemExit('Set repository Secret RD_SETTINGS_PIN to 4-16 ASCII digits')
+          if not (pin.isascii() and pin.isprintable() and pin == pin.strip() and 4 <= len(pin) <= 128):
+              raise SystemExit('Set repository Secret RD_SETTINGS_PIN to 4-128 printable ASCII characters without leading/trailing spaces')
           names = ('RD_ID_SERVER', 'RD_RELAY_SERVER', 'RD_API_SERVER', 'RD_PUBLIC_KEY')
           values = {name: os.environ.get(name, '').strip() for name in names}
           for name, value in values.items():
@@ -350,8 +350,8 @@ jobs:
           import os
           from pathlib import Path
           pin = os.environ.get('RD_SETTINGS_PIN', '')
-          if not (pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 16):
-              raise SystemExit('RD_SETTINGS_PIN must contain 4-16 ASCII digits')
+          if not (pin.isascii() and pin.isprintable() and pin == pin.strip() and 4 <= len(pin) <= 128):
+              raise SystemExit('RD_SETTINGS_PIN must contain 4-128 printable ASCII characters without leading/trailing spaces')
           p = Path('libs/hbb_common/src/config.rs')
           source = p.read_text(encoding='utf-8')
           old = '        config.unlock_pin = unlock_pin;\n        store |= store2;'
