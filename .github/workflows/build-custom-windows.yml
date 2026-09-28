@@ -1,5 +1,5 @@
 # Add this file to .github/workflows/build-custom-windows.yml on your default branch.
-# Required repository Secrets: RD_PERMANENT_PASSWORD, RD_SETTINGS_PIN; root asset: custom-icon.png.
+# Required repository Variables: RD_PERMANENT_PASSWORD, RD_SETTINGS_PIN; root asset: custom-icon.png.
 # Required repository Variables: RD_ID_SERVER, RD_RELAY_SERVER, RD_API_SERVER, RD_PUBLIC_KEY.
 # Builds upstream 1.4.9 plus these defaults; changes on the fork's master are not compiled.
 # Unsigned base client: additional printer/display drivers and privacy helper are not bundled.
@@ -32,19 +32,19 @@ jobs:
           RD_RELAY_SERVER: ${{ vars.RD_RELAY_SERVER }}
           RD_API_SERVER: ${{ vars.RD_API_SERVER }}
           RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
-          RD_PERMANENT_PASSWORD: ${{ secrets.RD_PERMANENT_PASSWORD }}
-          RD_SETTINGS_PIN: ${{ secrets.RD_SETTINGS_PIN }}
+          RD_PERMANENT_PASSWORD: ${{ vars.RD_PERMANENT_PASSWORD }}
+          RD_SETTINGS_PIN: ${{ vars.RD_SETTINGS_PIN }}
         run: |
           import base64
           import os
           from urllib.parse import urlsplit
           if len(os.environ.get('RD_PERMANENT_PASSWORD', '')) < 6:
-              raise SystemExit('Set repository Secret RD_PERMANENT_PASSWORD (at least 6 characters)')
+              raise SystemExit('Set repository Variable RD_PERMANENT_PASSWORD (at least 6 characters)')
           pin = os.environ.get('RD_SETTINGS_PIN', '')
           if not pin:
-              raise SystemExit('RD_SETTINGS_PIN is empty or unavailable. Add a repository Actions Secret with this exact name, not a Variable or an Environment-only Secret.')
+              raise SystemExit('RD_SETTINGS_PIN is empty or unavailable. Add a repository Actions Variable with this exact name under Variables, not an Environment-only variable.')
           if pin != pin.strip():
-              raise SystemExit('RD_SETTINGS_PIN has leading/trailing whitespace or a newline. Re-enter the Secret on one line.')
+              raise SystemExit('RD_SETTINGS_PIN has leading/trailing whitespace or a newline. Re-enter the Variable on one line.')
           if not pin.isascii() or not pin.isprintable():
               raise SystemExit('RD_SETTINGS_PIN contains non-ASCII or invisible/control characters. Type it manually using English letters and symbols.')
           if not 4 <= len(pin) <= 128:
@@ -218,7 +218,7 @@ jobs:
           RD_RELAY_SERVER: ${{ vars.RD_RELAY_SERVER }}
           RD_API_SERVER: ${{ vars.RD_API_SERVER }}
           RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
-          RD_PERMANENT_PASSWORD: ${{ secrets.RD_PERMANENT_PASSWORD }}
+          RD_PERMANENT_PASSWORD: ${{ vars.RD_PERMANENT_PASSWORD }}
         run: |
           import base64
           import hashlib
@@ -350,16 +350,16 @@ jobs:
       - name: Initialize settings unlock PIN
         shell: python {0}
         env:
-          RD_SETTINGS_PIN: ${{ secrets.RD_SETTINGS_PIN }}
+          RD_SETTINGS_PIN: ${{ vars.RD_SETTINGS_PIN }}
         run: |
           import json
           import os
           from pathlib import Path
           pin = os.environ.get('RD_SETTINGS_PIN', '')
           if not pin:
-              raise SystemExit('RD_SETTINGS_PIN is empty or unavailable. Add a repository Actions Secret with this exact name, not a Variable or an Environment-only Secret.')
+              raise SystemExit('RD_SETTINGS_PIN is empty or unavailable. Add a repository Actions Variable with this exact name under Variables, not an Environment-only variable.')
           if pin != pin.strip():
-              raise SystemExit('RD_SETTINGS_PIN has leading/trailing whitespace or a newline. Re-enter the Secret on one line.')
+              raise SystemExit('RD_SETTINGS_PIN has leading/trailing whitespace or a newline. Re-enter the Variable on one line.')
           if not pin.isascii() or not pin.isprintable():
               raise SystemExit('RD_SETTINGS_PIN contains non-ASCII or invisible/control characters. Type it manually using English letters and symbols.')
           if not 4 <= len(pin) <= 128:
@@ -522,7 +522,7 @@ jobs:
           Four repository Variables are compiled as defaults; saved local settings take precedence.
           Remote configuration modification, camera access and direct IP access are enabled by default and can be unchecked.
           Password verification defaults to both temporary and permanent passwords; existing local settings take precedence.
-          The preset is generated from the repository Secret, with a random salt and the upstream hash format.
+          The preset is generated from the repository Variable, with a random salt and the upstream hash format.
           Executable, runtime window and tray icons use custom-icon.png from the workflow repository.
           About-page branding: GIB company, website and slogan.
           Application identity and packaged startup executable are GIBRemote / GIBRemote.exe.
