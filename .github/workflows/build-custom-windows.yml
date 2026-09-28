@@ -235,6 +235,7 @@ jobs:
                   raise SystemExit(f'Invalid value for {variable}')
               lines.append(f'    settings.insert({json.dumps(option)}.to_owned(), {json.dumps(value)}.to_owned());')
           lines.append('    settings.insert("allow-remote-config-modification".to_owned(), "Y".to_owned());')
+          lines.append('    settings.insert("direct-server".to_owned(), "Y".to_owned());')
           lines.append('    settings.insert("enable-camera".to_owned(), "Y".to_owned());')
           lines.append('    settings.insert("verification-method".to_owned(), "use-both-passwords".to_owned());')
           lines.extend(['    RwLock::new(settings)', '};'])
@@ -434,7 +435,7 @@ jobs:
           @'
           RustDesk 1.4.9 custom Windows x64 base client (unsigned).
           Four repository Variables are compiled as defaults; saved local settings take precedence.
-          Remote configuration modification and camera access are enabled by default and can be unchecked.
+          Remote configuration modification, camera access and direct IP access are enabled by default and can be unchecked.
           Password verification defaults to both temporary and permanent passwords; existing local settings take precedence.
           The preset is generated from the repository Secret, with a random salt and the upstream hash format.
           Executable, runtime window and tray icons use custom-icon.png from the workflow repository.
