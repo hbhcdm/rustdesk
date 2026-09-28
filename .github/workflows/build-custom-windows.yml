@@ -417,6 +417,27 @@ jobs:
             if (-not (Test-Path "flutter/build/windows/x64/runner/Release/$file")) { throw "Missing output: $file" }
           }
 
+      - name: Prepare GIBRemote installation payload
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          release = Path('flutter/build/windows/x64/runner/Release')
+          source = release / 'rustdesk.exe'
+          target = release / 'GIBRemote.exe'
+          if not source.is_file() or source.stat().st_size == 0:
+              raise SystemExit('Missing compiled Windows executable')
+          if target.exists():
+              raise SystemExit('Unexpected GIBRemote.exe in build output; refusing stale payload')
+          source.rename(target)
+          for name in ('GIBRemote.exe', 'librustdesk.dll', 'flutter_windows.dll',
+                       'data/flutter_assets/assets/icon.ico', 'data/flutter_assets/assets/icon.png'):
+              path = release / name
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'Missing installation payload: {name}')
+          if source.exists():
+              raise SystemExit('Old executable name remains in installation payload')
+          print('Verified installation payload and startup executable: GIBRemote.exe')
+
       - name: Package standalone EXE
         run: |
           python -m pip install -r libs/portable/requirements.txt
@@ -425,7 +446,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Manifest preparation failed' }
           Push-Location libs/portable
           try {
-            python generate.py -f ../../flutter/build/windows/x64/runner/Release -o . -e ../../flutter/build/windows/x64/runner/Release/rustdesk.exe
+            python generate.py -f ../../flutter/build/windows/x64/runner/Release -o . -e ../../flutter/build/windows/x64/runner/Release/GIBRemote.exe
             if ($LASTEXITCODE -ne 0) { throw 'EXE packaging failed' }
           } finally { Pop-Location }
           New-Item -ItemType Directory -Force output | Out-Null
@@ -440,7 +461,8 @@ jobs:
           The preset is generated from the repository Secret, with a random salt and the upstream hash format.
           Executable, runtime window and tray icons use custom-icon.png from the workflow repository.
           About-page branding: GIB company, website and slogan.
-          Application identity is GIBRemote; existing RustDesk configuration is not automatically migrated.
+          Application identity and packaged startup executable are GIBRemote / GIBRemote.exe.
+          Existing RustDesk configuration is not automatically migrated.
           The privacy link is explicitly labelled as the original RustDesk privacy statement.
           The portable-installation warning text is hidden; the Install button remains available.
           Hiding the text does not change Windows UAC restrictions or install a service.
