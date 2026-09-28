@@ -1,4 +1,5 @@
 # Add this file to .github/workflows/build-custom-windows.yml on your default branch.
+# Required repository Secret: RD_PERMANENT_PASSWORD; root asset: custom-icon.png.
 # Required repository Variables: RD_ID_SERVER, RD_RELAY_SERVER, RD_API_SERVER, RD_PUBLIC_KEY.
 # Builds upstream 1.4.9 plus these defaults; changes on the fork's master are not compiled.
 # Unsigned base client: additional printer/display drivers and privacy helper are not bundled.
@@ -24,17 +25,20 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
-      - name: Check the four repository variables
+      - name: Check repository configuration
         shell: python3 {0}
         env:
           RD_ID_SERVER: ${{ vars.RD_ID_SERVER }}
           RD_RELAY_SERVER: ${{ vars.RD_RELAY_SERVER }}
           RD_API_SERVER: ${{ vars.RD_API_SERVER }}
           RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
+          RD_PERMANENT_PASSWORD: ${{ secrets.RD_PERMANENT_PASSWORD }}
         run: |
           import base64
           import os
           from urllib.parse import urlsplit
+          if len(os.environ.get('RD_PERMANENT_PASSWORD', '')) < 6:
+              raise SystemExit('Set repository Secret RD_PERMANENT_PASSWORD (at least 6 characters)')
           names = ('RD_ID_SERVER', 'RD_RELAY_SERVER', 'RD_API_SERVER', 'RD_PUBLIC_KEY')
           values = {name: os.environ.get(name, '').strip() for name in names}
           for name, value in values.items():
@@ -146,6 +150,16 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Checkout custom icon from this repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: _custom
+          sparse-checkout: custom-icon.png
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -157,14 +171,47 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Embed server defaults
+      - name: Install image conversion dependency
+        run: |
+          python -m pip install Pillow==11.3.0
+          if ($LASTEXITCODE -ne 0) { throw 'Icon conversion dependency installation failed' }
+
+      - name: Apply custom Windows icon
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          from PIL import Image, ImageOps
+          source = Path('_custom/custom-icon.png')
+          if not source.is_file():
+              raise SystemExit('Upload custom-icon.png to the root of your repository first')
+          with Image.open(source) as im:
+              im = ImageOps.exif_transpose(im).convert('RGBA')
+              side = max(im.size)
+              canvas = Image.new('RGBA', (side, side), (255, 255, 255, 0))
+              canvas.alpha_composite(im, ((side-im.width)//2, (side-im.height)//2))
+              sizes = [(n, n) for n in (16, 24, 32, 48, 64, 128, 256)]
+              for target in ('res/icon.ico', 'flutter/windows/runner/resources/app_icon.ico'):
+                  p = Path(target)
+                  if not p.is_file():
+                      raise SystemExit(f'Expected upstream icon is missing: {target}')
+                  canvas.save(p, format='ICO', sizes=sizes)
+                  with Image.open(p) as check:
+                      if check.ico.sizes() != set(sizes):
+                          raise SystemExit(f'Icon size validation failed: {target}')
+          print('Applied custom executable and Windows runner icons')
+
+      - name: Embed server and permission defaults
         shell: python {0}
         env:
           RD_ID_SERVER: ${{ vars.RD_ID_SERVER }}
           RD_RELAY_SERVER: ${{ vars.RD_RELAY_SERVER }}
           RD_API_SERVER: ${{ vars.RD_API_SERVER }}
           RD_PUBLIC_KEY: ${{ vars.RD_PUBLIC_KEY }}
+          RD_PERMANENT_PASSWORD: ${{ secrets.RD_PERMANENT_PASSWORD }}
         run: |
+          import base64
+          import hashlib
+          import secrets
           import json
           import os
           from pathlib import Path
@@ -186,9 +233,26 @@ jobs:
               if not value or not value.isascii() or any(c.isspace() for c in value):
                   raise SystemExit(f'Invalid value for {variable}')
               lines.append(f'    settings.insert({json.dumps(option)}.to_owned(), {json.dumps(value)}.to_owned());')
+          lines.append('    settings.insert("allow-remote-config-modification".to_owned(), "Y".to_owned());')
+          lines.append('    settings.insert("enable-camera".to_owned(), "Y".to_owned());')
+          lines.append('    settings.insert("verification-method".to_owned(), "use-permanent-password".to_owned());')
+          lines.extend(['    RwLock::new(settings)', '};'])
+          source = source.replace(old, '\n'.join(lines))
+          password = os.environ.get('RD_PERMANENT_PASSWORD', '')
+          if len(password) < 6:
+              raise SystemExit('RD_PERMANENT_PASSWORD must contain at least 6 characters')
+          salt = secrets.token_hex(16)
+          storage = '00' + base64.b64encode(hashlib.sha256((password + salt).encode('utf-8')).digest()).decode('ascii')
+          old = 'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = Default::default();'
+          if source.count(old) != 1:
+              raise SystemExit('Expected one HARD_SETTINGS declaration; refusing an ambiguous patch')
+          lines = ['pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = {',
+                   '    let mut settings = HashMap::new();']
+          for key, value in (('password', storage), ('salt', salt)):
+              lines.append(f'    settings.insert({json.dumps(key)}.to_owned(), {json.dumps(value)}.to_owned());')
           lines.extend(['    RwLock::new(settings)', '};'])
           p.write_text(source.replace(old, '\n'.join(lines)), encoding='utf-8')
-          print('Embedded four server defaults; existing local settings can override them.')
+          print('Embedded server defaults, camera and remote configuration permissions, and a hashed permanent-password preset; existing local settings take precedence.')
 
       - name: Configure native tools and dependency mirror
         run: |
@@ -271,6 +335,19 @@ jobs:
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT\installed"
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg dependency installation failed' }
 
+      - name: Hide the portable installation warning text
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          p = Path('flutter/lib/desktop/pages/desktop_home_page.dart')
+          source = p.read_text(encoding='utf-8')
+          old = '"", bind.isOutgoingOnly() ? "" : "install_tip", "Install",'
+          new = '"", "", "Install",'
+          if source.count(old) != 1:
+              raise SystemExit('Expected one Windows install_tip card; source layout has changed')
+          p.write_text(source.replace(old, new), encoding='utf-8')
+          print('Hidden the portable-installation warning text. The Install button remains available.')
+
       - name: Build Windows client
         run: |
           python build.py --flutter --portable --hwcodec --vram --skip-portable-pack
@@ -297,6 +374,12 @@ jobs:
           @'
           RustDesk 1.4.9 custom Windows x64 base client (unsigned).
           Four repository Variables are compiled as defaults; saved local settings take precedence.
+          Remote configuration modification and camera access are enabled by default and can be unchecked.
+          Password verification defaults to permanent password; an existing local password takes precedence.
+          The preset is generated from the repository Secret, with a random salt and the upstream hash format.
+          Executable and Windows runner icons use custom-icon.png from the workflow repository.
+          The portable-installation warning text is hidden; the Install button remains available.
+          Hiding the text does not change Windows UAC restrictions or install a service.
           Test on a clean Windows account or VM to verify your server configuration.
           Additional printer/display drivers and the privacy-mode helper are not bundled.
           '@ | Set-Content output/BUILD-NOTES.txt -Encoding utf8
