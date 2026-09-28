@@ -335,6 +335,40 @@ jobs:
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT\installed"
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg dependency installation failed' }
 
+      - name: Customize the About page
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          p = Path('flutter/lib/desktop/pages/desktop_setting_page.dart')
+          source = p.read_text(encoding='utf-8')
+          start = source.index('class _AboutState extends State<_About> {')
+          end = source.index('//#endregion', start)
+          about = source[start:end]
+          def replace_once(old, new):
+              global about
+              if about.count(old) != 1:
+                  raise SystemExit('Unexpected About page structure; verify upstream 1.4.9 source')
+              about = about.replace(old, new, 1)
+          replace_once("title: translate('About RustDesk')", "title: '关于 济彼远程协助'")
+          replace_once("launchUrlString('https://rustdesk.com');", "launchUrlString('https://www.gib.cn');")
+          replace_once("translate('Privacy Statement')", "'RustDesk 原版隐私声明'")
+          original_copyright = r"'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license'"
+          replace_once(original_copyright, r"'贵州济彼科技有限公司\nCopyright © 2026 GIB Tech Co., Ltd.'")
+          replace_once("translate('Slogan_tip')", "'济以新智 彼见所成'")
+          # Keep upstream attribution and license visible below the custom brand panel.
+          anchor = ').marginSymmetric(vertical: 4.0)\n            ],'
+          replacement = """          ).marginSymmetric(vertical: 4.0),
+                        SelectionArea(
+                          child: Text(
+                            '基于 RustDesk 开源项目\\nCopyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\\n$license',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ],"""
+          replace_once(anchor, replacement.lstrip())
+          p.write_text(source[:start] + about + source[end:], encoding='utf-8')
+          print('Applied GIB About-page branding; version, fingerprint and upstream attribution retained')
+
       - name: Hide the portable installation warning text
         shell: python {0}
         run: |
@@ -378,6 +412,8 @@ jobs:
           Password verification defaults to permanent password; an existing local password takes precedence.
           The preset is generated from the repository Secret, with a random salt and the upstream hash format.
           Executable and Windows runner icons use custom-icon.png from the workflow repository.
+          About-page branding: GIB company, website and slogan; upstream attribution retained below.
+          The privacy link is explicitly labelled as the original RustDesk privacy statement.
           The portable-installation warning text is hidden; the Install button remains available.
           Hiding the text does not change Windows UAC restrictions or install a service.
           Test on a clean Windows account or VM to verify your server configuration.
