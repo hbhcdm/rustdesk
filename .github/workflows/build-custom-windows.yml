@@ -18,6 +18,8 @@ concurrency:
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   CARGO_BUILD_JOBS: "4"
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
 
 jobs:
   bridge:
@@ -573,6 +575,36 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Collect failure diagnostics into workspace
+        if: failure()
+        continue-on-error: true
+        shell: python {0}
+        run: |
+          import os
+          import shutil
+          from pathlib import Path
+          destination = Path(os.environ['GITHUB_WORKSPACE']) / 'build-diagnostics'
+          count = 0
+          sources = (
+              (Path(os.environ['VCPKG_ROOT']) / 'buildtrees', 'vcpkg', ('*.log',)),
+              (Path('flutter/build/windows'), 'flutter', ('*.log', 'CMakeConfigureLog.yaml')),
+          )
+          for root, label, patterns in sources:
+              if not root.is_dir():
+                  continue
+              for pattern in patterns:
+                  for source in root.rglob(pattern):
+                      if not source.is_file():
+                          continue
+                      target = destination / label / source.relative_to(root)
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      try:
+                          shutil.copyfile(source, target)
+                          count += 1
+                      except OSError:
+                          print(f'Could not copy diagnostic file: {source.name}')
+          print(f'Collected {count} diagnostic files into workspace')
+
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -580,6 +612,4 @@ jobs:
           name: Windows-build-diagnostics
           if-no-files-found: ignore
           retention-days: 7
-          path: |
-            C:/rd-vcpkg/buildtrees/**/*.log
-            flutter/build/windows/**/CMakeFiles/CMakeConfigureLog.yaml
+          path: build-diagnostics/
