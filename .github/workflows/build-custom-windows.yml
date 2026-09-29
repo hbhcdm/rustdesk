@@ -382,7 +382,7 @@ jobs:
           p.write_text(source.replace(old, new, 1), encoding='utf-8')
           print('Configured first-use settings PIN; existing PINs and subsequent changes are preserved')
 
-      - name: Set GIBRemote Windows application identity
+      - name: Set 济彼远程 Windows application identity
         shell: python {0}
         run: |
           from pathlib import Path
@@ -394,15 +394,15 @@ jobs:
               p.write_text(s.replace(old, new, 1), encoding='utf-8')
           patch('libs/hbb_common/src/config.rs',
                 'pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());',
-                'pub static ref APP_NAME: RwLock<String> = RwLock::new("GIBRemote".to_owned());')
+                'pub static ref APP_NAME: RwLock<String> = RwLock::new("济彼远程".to_owned());')
           patch('flutter/windows/runner/main.cpp',
                 'std::wstring app_name = L"RustDesk";',
-                'std::wstring app_name = L"GIBRemote";')
+                r'std::wstring app_name = L"\u6d4e\u5f7c\u8fdc\u7a0b";')
           for old, new in (
-              ('"FileDescription", "RustDesk Remote Desktop"', '"FileDescription", "GIBRemote"'),
-              ('"InternalName", "rustdesk"', '"InternalName", "GIBRemote"'),
-              ('"OriginalFilename", "rustdesk.exe"', '"OriginalFilename", "GIBRemote.exe"'),
-              ('"ProductName", "RustDesk"', '"ProductName", "GIBRemote"'),
+              ('"FileDescription", "RustDesk Remote Desktop"', '"FileDescription", "济彼远程"'),
+              ('"InternalName", "rustdesk"', '"InternalName", "济彼远程"'),
+              ('"OriginalFilename", "rustdesk.exe"', '"OriginalFilename", "济彼远程.exe"'),
+              ('"ProductName", "RustDesk"', '"ProductName", "济彼远程"'),
           ):
               patch('flutter/windows/runner/Runner.rc', old, new)
           p = Path('src/platform/windows.rs')
@@ -416,7 +416,7 @@ jobs:
           block = block.replace(old, 'let app_name = crate::get_app_name();')
           block = block.replace('format!("{app_name}.exe")', 'format!("{app_name}.exe").to_lowercase()')
           p.write_text(source[:start] + block + source[end:], encoding='utf-8')
-          print('Set application identity, installed executable, shortcuts and service name to GIBRemote')
+          print('Set application identity, installed executable, shortcuts and service name to 济彼远程')
 
       - name: Customize home support label
         shell: python {0}
@@ -451,7 +451,7 @@ jobs:
               if about.count(old) != 1:
                   raise SystemExit('Unexpected About page structure; verify upstream 1.4.9 source')
               about = about.replace(old, new, 1)
-          replace_once("title: translate('About RustDesk')", "title: '关于 济彼远程协助'")
+          replace_once("title: translate('About RustDesk')", "title: '关于 济彼远程'")
           replace_once("launchUrlString('https://rustdesk.com');", "launchUrlString('https://www.gib.cn');")
           replace_once("translate('Privacy Statement')", "'RustDesk 原版隐私声明'")
           original_copyright = r"'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license'"
@@ -481,26 +481,26 @@ jobs:
             if (-not (Test-Path "flutter/build/windows/x64/runner/Release/$file")) { throw "Missing output: $file" }
           }
 
-      - name: Prepare GIBRemote installation payload
+      - name: Prepare 济彼远程 installation payload
         shell: python {0}
         run: |
           from pathlib import Path
           release = Path('flutter/build/windows/x64/runner/Release')
           source = release / 'rustdesk.exe'
-          target = release / 'GIBRemote.exe'
+          target = release / '济彼远程.exe'
           if not source.is_file() or source.stat().st_size == 0:
               raise SystemExit('Missing compiled Windows executable')
           if target.exists():
-              raise SystemExit('Unexpected GIBRemote.exe in build output; refusing stale payload')
+              raise SystemExit('Unexpected 济彼远程.exe in build output; refusing stale payload')
           source.rename(target)
-          for name in ('GIBRemote.exe', 'librustdesk.dll', 'flutter_windows.dll',
+          for name in ('济彼远程.exe', 'librustdesk.dll', 'flutter_windows.dll',
                        'data/flutter_assets/assets/icon.ico', 'data/flutter_assets/assets/icon.png'):
               path = release / name
               if not path.is_file() or path.stat().st_size == 0:
                   raise SystemExit(f'Missing installation payload: {name}')
           if source.exists():
               raise SystemExit('Old executable name remains in installation payload')
-          print('Verified installation payload and startup executable: GIBRemote.exe')
+          print('Verified installation payload and startup executable: 济彼远程.exe')
 
       - name: Package standalone EXE
         run: |
@@ -510,13 +510,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Manifest preparation failed' }
           Push-Location libs/portable
           try {
-            python generate.py -f ../../flutter/build/windows/x64/runner/Release -o . -e ../../flutter/build/windows/x64/runner/Release/GIBRemote.exe
+            python generate.py -f ../../flutter/build/windows/x64/runner/Release -o . -e ../../flutter/build/windows/x64/runner/Release/济彼远程.exe
             if ($LASTEXITCODE -ne 0) { throw 'EXE packaging failed' }
           } finally { Pop-Location }
           New-Item -ItemType Directory -Force output | Out-Null
-          Copy-Item target/release/rustdesk-portable-packer.exe output/GIBRemote-1.4.9-custom-x64.exe
-          $file = Get-FileHash output/GIBRemote-1.4.9-custom-x64.exe -Algorithm SHA256
-          "$($file.Hash.ToLower())  GIBRemote-1.4.9-custom-x64.exe" | Set-Content output/SHA256SUMS.txt -Encoding ascii
+          Copy-Item target/release/rustdesk-portable-packer.exe output/济彼远程-1.4.9-custom-x64.exe
+          $file = Get-FileHash output/济彼远程-1.4.9-custom-x64.exe -Algorithm SHA256
+          "$($file.Hash.ToLower())  济彼远程-1.4.9-custom-x64.exe" | Set-Content output/SHA256SUMS.txt -Encoding utf8
           @'
           RustDesk 1.4.9 custom Windows x64 base client (unsigned).
           Four repository Variables are compiled as defaults; saved local settings take precedence.
@@ -525,8 +525,8 @@ jobs:
           The preset is generated from the repository Variable, with a random salt and the upstream hash format.
           Executable, runtime window and tray icons use custom-icon.png from the workflow repository.
           About-page branding: GIB company, website and slogan.
-          Application identity and packaged startup executable are GIBRemote / GIBRemote.exe.
-          Existing RustDesk configuration is not automatically migrated.
+          Application identity and packaged startup executable are 济彼远程 / 济彼远程.exe.
+          Existing RustDesk or GIBRemote configuration is not automatically migrated.
           Installed-client settings use an initial unlock PIN from RD_SETTINGS_PIN when none exists.
           Existing PINs and later changes or removal are preserved; this is a UI settings lock.
           The privacy link is explicitly labelled as the original RustDesk privacy statement.
