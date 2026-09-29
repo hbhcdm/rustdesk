@@ -451,7 +451,7 @@ jobs:
               if about.count(old) != 1:
                   raise SystemExit('Unexpected About page structure; verify upstream 1.4.9 source')
               about = about.replace(old, new, 1)
-          replace_once("title: translate('About RustDesk')", "title: '关于 济彼远程'")
+          replace_once("title: translate('About RustDesk')", "title: '济彼远程'")
           replace_once("launchUrlString('https://rustdesk.com');", "launchUrlString('https://www.gib.cn');")
           replace_once("translate('Privacy Statement')", "'RustDesk 原版隐私声明'")
           original_copyright = r"'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license'"
@@ -472,6 +472,32 @@ jobs:
               raise SystemExit('Expected one Windows install_tip card; source layout has changed')
           p.write_text(source.replace(old, new), encoding='utf-8')
           print('Hidden the portable-installation warning text. The Install button remains available.')
+
+      - name: Make downloaded package install and launch by default
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          def patch(path, old, new):
+              p = Path(path)
+              source = p.read_text(encoding='utf-8')
+              if source.count(old) != 1:
+                  raise SystemExit(f'Unexpected installation entry point in {path}')
+              p.write_text(source.replace(old, new, 1), encoding='utf-8')
+          # Only the distribution wrapper defaults to installation. The installed
+          # Flutter executable keeps its normal no-argument startup behavior.
+          patch('libs/portable/src/main.rs',
+                'let click_setup = args.is_empty() && arg_exe.to_lowercase().ends_with("install.exe");',
+                'let click_setup = args.is_empty();')
+          patch('libs/portable/src/main.rs',
+                'args = vec!["--install".to_owned()];',
+                'args = vec!["--gib-install-and-run".to_owned()];')
+          patch('src/core_main.rs',
+                '} else if args[0] == "--silent-install" {',
+                '} else if args[0] == "--silent-install" || args[0] == "--gib-install-and-run" {')
+          patch('src/core_main.rs',
+                'let res = platform::install_me(options, "".to_owned(), true, debug);',
+                'let res = platform::install_me(options, "".to_owned(), args[0] == "--silent-install", debug);')
+          print('Download package defaults to install-and-run; native UAC and installation error handling retained')
 
       - name: Build Windows client
         run: |
@@ -531,7 +557,10 @@ jobs:
           Existing PINs and later changes or removal are preserved; this is a UI settings lock.
           The privacy link is explicitly labelled as the original RustDesk privacy statement.
           The portable-installation warning text is hidden; the Install button remains available.
-          Hiding the text does not change Windows UAC restrictions or install a service.
+          Double-clicking the downloaded package installs and launches the app after Windows UAC approval.
+          The installed executable and shortcuts launch normally without reinstalling.
+          Explicit command-line arguments retain their upstream behavior.
+          Hiding the text does not change Windows UAC restrictions.
           Test on a clean Windows account or VM to verify your server configuration.
           Additional printer/display drivers and the privacy-mode helper are not bundled.
           '@ | Set-Content output/BUILD-NOTES.txt -Encoding utf8
